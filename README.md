@@ -8,7 +8,7 @@ Code for Investigating Coreference Resolution Systems by Centering Theory
 - Install Allennlp from source following the instructions.
 
 ## Corpus-based Analysis of CT
-- The analysis logistics is provided in ``Corpuse Analysis on OntoNotes.ipynb``. This document contains some useful statistics about the dataset we conducted experiments on, check out Section 2.
+- The analysis logistics is provided in ``Corpuse_Analysis_on_OntoNotes.ipynb``. This document contains some useful statistics about the dataset we conducted experiments on, check out Section 2.
 - To reproduce the results, run ``corpusAnalysis.py``.
 
 ## Analysis on Coreference Systems

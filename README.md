@@ -14,5 +14,5 @@ Code for Investigating Coreference Resolution Systems by Centering Theory
 ## Analysis on Coreference Systems
 -  ``Coreference_System_Analysis.ipynb``
 
-## The correlation between Coref F1 and CT-based scores
+## The Correlation between Coref F1 and CT-based Scores
 -  ``F1_CT.ipynb``

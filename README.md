@@ -80,7 +80,7 @@ CenteringUtterance(sentence: ConvertedSent,
 ### Step 2: Get CT scores
 ```ON
 python c2f_analysis.py  \
-`--data_dir path/to/coreference/models
+--data_dir path/to/coreference/models
 -e coref-spanbert-base-2021.1.5 \
 -dp 100 \
 --epoch best \

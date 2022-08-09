@@ -1,7 +1,9 @@
 # Investigating the Role of Centering Theory in Neural Coreference Resolution
+<p float="middle">
+  <img src="/CT_vs_Coref.png" width="400" />
+  <img src="/image/ct_example.png" width="400" />
+</p>
 
-<img align="left" width="450" src="image/CT_vs_Coref.png">
-<img align="right" width="400" src="image/ct_example.png">
 
 This is an implementation of the paper 
 [Investigating the Role of Centering Theory in Neural Coreference Resolution](https://www.overleaf.com/project/5fd265b15622577f9fc605b8).

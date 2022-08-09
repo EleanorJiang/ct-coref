@@ -76,7 +76,9 @@ CenteringUtterance(sentence: ConvertedSent,
 
 ## Running the experiments
 ### Step 1: Train coreference models
-
+```ON
+python get_coref_F1.py
+```
 ### Step 2: Get CT scores
 ```ON
 python c2f_analysis.py  \

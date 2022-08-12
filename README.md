@@ -86,8 +86,7 @@ python c2f_analysis.py  \
 -e coref-spanbert-base-2021.1.5 \
 -dp 100 \
 --epoch best \
--r path/to/save/results \
--g 0.5
+-r path/to/save/results
 ```
 
 ## Contact

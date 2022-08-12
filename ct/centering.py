@@ -103,10 +103,8 @@ class CenteringUtterance:
         self.coherence = None
         self.salience = None
 
-
     def _set_candidate_mentions(self, someTypeSpanLst): # coref_spans or clusters or top_spans
         return OrderedSet(someTypeSpanLst)
-
 
     def _set_CF_list(self, gram_role, pos_tags):
         entities: DefaultDict[str, List[TypedSpan]] = collections.defaultdict(list)
@@ -129,7 +127,6 @@ class CenteringUtterance:
                 entities["others"].append(typed_span)
         for key in ['pro-subj', 'pro-obj', 'pro-other', 'subj', 'obj', 'others']:
             self.CF_list.extend(entities[key])
-
 
     def _set_CF_list_by_srl(self, srl, pos_tags):
         entities: DefaultDict[str, List[TypedSpan]] = collections.defaultdict(list)
@@ -154,7 +151,6 @@ class CenteringUtterance:
         for key in ['PRP-ARG0', 'PRP-ARG1', 'PRP-other', 'ARG0', 'ARG1', 'others']:
             self.CF_list.extend(entities[key])
 
-
     def _set_CF_weights(self):
         CF_weights = {}
         i = 1
@@ -176,36 +172,74 @@ class CenteringUtterance:
         :return:
         '''
         # Seeking the nearest valid sentence (we are skipping utterances with empty candidate_mentions, e.g. "Uh-huh.")
-        for i in range(self.sentence_id - 1, -1, -1):
+        Uprev = None
+        for i in range(len(centering_document) - 1, -1, -1):
             Uprev = centering_document[i]
             if len(Uprev.CF_list):
                 break
         # if no previous sentences are valid (candidate_mentions/CF_list is not empty),
         # we return with CB and cheapness&coherence being None.
-        if len(Uprev.CF_list) == 0 or len(self.candidate_mentions) == 0:
+        if len(self.candidate_mentions) == 0 or Uprev is None or len(Uprev.CF_list) == 0:
             return
         # set CB as the top ranking entity in Uprev.CF_list which exists in current candidate_mentions
-        tmp_list = [entity[0] for entity in self.candidate_mentions]
-        if Uprev.CF_list[0][0] in tmp_list:
-            self.CB = Uprev.CF_list[0][0]
+        tmp_list = [entity[0] for entity in self.CF_list]
+        if Uprev.CP in tmp_list:
             self.cheapness = True
-            if Uprev.CB and self.CB != Uprev.CB:
-                self.coherence = False
-            else:
-                self.coherence = True
-            return
-        # if CB is not equal to the top element in Uprev.CF_list (CP_{n-1})
-        self.cheapness = False
+        else:
+            # if CB is not equal to the top element in Uprev.CF_list (CP_{n-1})
+            self.cheapness = False
         # continue searching other elements in Uprev.CF_list
         for typed_span in Uprev.CF_list:
             if typed_span[0] in tmp_list:
                 self.CB = typed_span[0]
-                if Uprev.CB and self.CB != Uprev.CB:
-                    self.coherence = False
-                else:
+                if Uprev.CB is None or self.CB == Uprev.CB:
                     self.coherence = True
+                else:
+                    self.coherence = False
                 return
         # if candidate_mentions is not empty and Uprev.CF_list is not empty but they are disjoint, then set CB to NOCB
+        self.CB = None
+        self.coherence = False
+
+    def set_CB_and_cheapness_coherence(self, centering_document, window_size=None):
+        '''
+        Modify from set_CB_and_cheapness_coherence:
+            changed the way to choose CB
+            now it's the highest ranked entity in the previous #window_size mentions
+        CB, cheapness and coherence are also set here
+        paras: [paras, gate_escape_factor]
+              W[Cb(Un)] <- W[Cb(Uprev)] * decay_factor +
+                            gate_escape_factor * [ Cf(Uprev) - Cf(Un) ] * Uprev.CF_weights[Cf(Uprev)] +  [Cf(Un) ^ Cf(Uprev)] * Uprev.CF_weights[Cf(Uprev)]
+
+        '''
+        # Seeking the nearest valid sentence (we are skipping utterances with empty candidate_mentions, e.g. "Uh-huh.")
+        Uprev = None
+        for i in range(len(centering_document) - 1, -1, -1):
+            Uprev = centering_document[i]
+            if len(Uprev.CF_list):
+                break
+        # if no previous sentences are valid (candidate_mentions/CF_list is not empty),
+        # we return with CB and cheapness&coherence being None.
+        if len(self.candidate_mentions) == 0 or Uprev is None or len(Uprev.CF_list) == 0:
+            return
+        # set CB as the top ranking entity in Uprev.CF_list which exists in current candidate_mentions
+        tmp_list = [entity[0] for entity in self.CF_list]
+        if Uprev.CP in tmp_list:
+            self.cheapness = True
+        else:
+            # if CB is not equal to the top element in Uprev.CF_list (CP_{n-1})
+            self.cheapness = False
+        # continue searching other elements in Uprev.CF_list
+        for typed_span in Uprev.CF_list:
+            if typed_span[0] in tmp_list:
+                self.CB = typed_span[0]
+                if Uprev.CB is None or self.CB == Uprev.CB:
+                    self.coherence = True
+                else:
+                    self.coherence = False
+                return
+        # if candidate_mentions is not empty and Uprev.CF_list is not empty but they are disjoint, then set CB to NOCB
+        self.CB = None
         self.coherence = False
 
     def set_CB_weights(self, Uprev, paras=None):
@@ -260,14 +294,12 @@ class CenteringUtterance:
                 #     raise AssertionError("entity must be either in prev CF or CB")
             # print("CB_weights", self.CB_weights)
 
-
         self.CB = nlargest(1, self.CB_weights, key=self.CB_weights.get)[0]
         # print(self.CB)
         if self.CB_weights[self.CB] == 0:
             self.CB = None
         self.cheapness = self.set_cheapness(Uprev)
         self.coherence = self.set_coherence(Uprev)
-
 
     def set_cheapness(self, Uprev):
         """
@@ -279,7 +311,7 @@ class CenteringUtterance:
         """
         Uprev.CF_list[0][0] is the entity id of CP, the top one entity in the CF_list
         """
-        return self.CB == Uprev.CB
+        return Uprev.CB is not None and self.CB == Uprev.CB
 
     def set_salience(self):
         if self.CF_list != []:
@@ -327,7 +359,8 @@ def converted_to_centering(converted_document, paras=None,
             continue
         prviousUtterance = curUtterance
         curUtterance = tmpUtterance
-        curUtterance.set_CB_weights(prviousUtterance, paras=paras)
+        curUtterance.set_CB_and_cheapness_coherence(centering_document)
+        # curUtterance.set_CB_weights(prviousUtterance, paras=paras)
         # print("CF_weights: ", curUtterance.CF_weights)
         # print("CB_weights", curUtterance.CB_weights)
         curUtterance.set_salience()

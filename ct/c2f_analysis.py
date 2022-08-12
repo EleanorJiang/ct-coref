@@ -15,7 +15,7 @@ Usage:
   3. Batch operation without repeating producing existing Table_2 files: c2f_analysis.c2f_analysis(archive_path).
 """
 
-from ct_util import *
+from .ct_util import *
 import argparse
 import pickle, os, collections, spacy
 from typing import List, Tuple, DefaultDict

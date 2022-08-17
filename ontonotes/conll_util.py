@@ -29,13 +29,14 @@ def ontoNotes2spacy(ontonotes_file, nlp, save_path) -> List[Dict[str, List[List[
     :param predicted_dict_file: `best_predicted_dicts.data` for reference
 
     :return: predicted_dicts: List[List[Dict[str, List[List[Any]]]]]
+                             a list of predicted dict, each predicted dict corresponds to one sentence in the document
             Example:
             text = "Marry believes in herself but Henry does n’t believe her.”
+                     Note that we use " " to connect multiple sentences.
             predicted_dict: {
                          'document': ['Marry', 'believes',  'in', 'herself','but', ‘Henry’, 'does' , ”n’t”, 'believe', 'her', '.'],
                          'clusters': [[[0, 0], [3, 3], [9, 9]]],   # Note that singleton [9,9] is excluded.
                          'pos_tags':  ['SUBJ', 'VERB',  'in', 'herself','but', ‘Henry’, 'does' , ”n’t”, 'believe', 'her', 'PUNCT'],
-                         'srl': ['Marry', 'believes',  'in', 'herself','but', ‘Henry’, 'does' , ”n’t”, 'believe', 'her', '.'],
                          }
     '''
     ontonotes_reader = Ontonotes()
@@ -85,7 +86,7 @@ def ontoNotes2spacy(ontonotes_file, nlp, save_path) -> List[Dict[str, List[List[
                 for span in word_cover:
                     if span[0] == -1 or span[1] == -1:
                         print(word_cover)
-                        raise AssertionError("Sanity check fails: Every ``entence.word'' should be covered && "
+                        raise AssertionError("Sanity check fails: Every ``sentence.word'' should be covered && "
                                              "Every ``token_ids'' should be assigned.")
             predicted_dict['document'] = [token for token in tokens]
             # now we add predicted_dict['clusters']: List[List[Span]]
@@ -108,6 +109,9 @@ def ontoNotes2spacy(ontonotes_file, nlp, save_path) -> List[Dict[str, List[List[
         json.dump(nested_predicted_dicts, filehandle)
 
     return nested_predicted_dicts
+
+
+
 
 
 if __name__=="__main__":

@@ -18,8 +18,6 @@ def prepare_data_full(dataset_path, archive_path):
             os.path.exists(os.path.join(archive_path, 'gram_roles.data')):
         with open(os.path.join(archive_path, 'documents.data'), 'rb') as filehandle:
             documents = pickle.load(filehandle)
-        with open(os.path.join(archive_path, 'gram_roles.data'), 'rb') as filehandle:
-            gram_roles = pickle.load(filehandle)
     else:
         documents, gram_roles, mention_masks, document_lens, doc_ids, clusters_info = readOntoNotes_full(dataset_path)
         with open(os.path.join(archive_path, 'documents.data'), 'wb') as filehandle:

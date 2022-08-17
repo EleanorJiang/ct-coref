@@ -1,9 +1,10 @@
-from typing import DefaultDict, List, Optional, Iterator, Set, Tuple
+from typing import DefaultDict, List, Optional, Iterator, Set, Tuple, Dict
 from collections import defaultdict
 import codecs
 import os
 import logging
 import spacy
+
 
 from nltk import Tree
 
@@ -51,6 +52,7 @@ class OntonotesSentence:
         The spans for entity mentions involved in coreference resolution within the sentence.
         Each element is a tuple composed of (cluster_id, (start_index, end_index)). Indices
         are `inclusive`.
+    cluster: `Dict[int, List[Tuple[int, int]]]`. cluster_id -> list of (start_index, end_index).
     """
 
     def __init__(
@@ -67,6 +69,7 @@ class OntonotesSentence:
         named_entities: List[str],
         srl_frames: List[Tuple[str, List[str]]],
         coref_spans: Set[TypedSpan],
+        cluster: Dict[int, List[Tuple[int, int]]]
     ) -> None:
 
         self.document_id = document_id
@@ -81,6 +84,7 @@ class OntonotesSentence:
         self.named_entities = named_entities
         self.srl_frames = srl_frames
         self.coref_spans = coref_spans
+        self.cluster = cluster
 
 
 class Ontonotes:
@@ -347,18 +351,19 @@ class Ontonotes:
             (cluster_id, span) for cluster_id, span_list in clusters.items() for span in span_list
         }
         return OntonotesSentence(
-            document_id,
-            sentence_id,
-            sentence,
-            pos_tags,
-            parse_tree,
-            predicate_lemmas,
-            predicate_framenet_ids,
-            word_senses,
-            speakers,
-            named_entities,
-            srl_frames,
-            coref_span_tuples,
+            document_id=document_id,
+            sentence_id=sentence_id,
+            sentence=sentence,
+            pos_tags=pos_tags,
+            parse_tree=parse_tree,
+            predicate_lemmas=predicate_lemmas,
+            predicate_framenet_ids=predicate_framenet_ids,
+            word_senses=word_senses,
+            speakers=speakers,
+            named_entities=named_entities,
+            srl_frames=srl_frames,
+            coref_span_tuples=coref_span_tuples,
+            clusters=dict(clusters)  # NEW: to match the predicted_dict
         )
 
     @staticmethod
@@ -449,4 +454,3 @@ class Ontonotes:
             # Exiting a span, so we reset the current span label for this annotation.
             if ")" in annotation:
                 current_span_labels[annotation_index] = None
-

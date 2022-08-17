@@ -66,7 +66,9 @@ def readOntoNotes_full(file_path):
             for i,token in enumerate(tokens):
                 if token in sentence.words[cursor]:
                     token_id.append(token)
-                if i < len(tokens)-1 and tokens[i+1] not in sentence.words[cursor]:
+                else:
+                    print("impossible")
+                if tokens[i+1] not in sentence.words[cursor]:
                     cursor += 1
             for token in doc:
                 if 'subj' in token.dep_:

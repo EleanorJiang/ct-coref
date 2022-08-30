@@ -144,8 +144,12 @@ centeringDiscourse = CenteringDiscourse(converted_document, ranking="grl")
 
 #### Step 3 (optional): 
 Calculte the CT scores:
-
-
+```python
+final_CT_scores, unnormalized_CT_scores = centering.calculate_permutation_scores(centeringDiscourse)
+```
+- `unnormalized_CT_scores`: `Dict[str, float]`. A dict of unnormalized CT scores,
+  where the scores are the ratio of the number of uttterances where a certain CT predicate being true to the total numbers of uttterances.
+- `final_CT_scores`: `Dict[str, float]`. A dict of final CT scores. For example, `{"nocb": 0, "salience": 0, "coherence": 0, "cheapness": 0, "transition": 0, "kp": 0}`
 
 
 ## Running the experiments

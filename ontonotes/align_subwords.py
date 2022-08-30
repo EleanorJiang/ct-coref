@@ -60,6 +60,30 @@ def longestCommonPrefix(a):
     return pre
 
 
+def rm_white(tokens):
+    """
+    Remove all the whitespaces in src_tokens and tgt_tokens.
+    """
+    return [tok.replace(" ", "") for tok in tokens]
+
+
+def replace_spe(tokens, vocab_match):
+    tmp_tokens = deepcopy(tokens)
+    for i, tok in enumerate(tokens):
+        if tok in vocab_match.keys():
+            tmp_tokens[i] = vocab_match[tok]
+    return tmp_tokens
+
+
+def get_str(tokens, vocab_match):
+    toks = rm_white(tokens)
+    if vocab_match:
+        toks = replace_spe(toks, vocab_match)
+    str = "".join(toks)
+    lens = [len(tok) for tok in toks]
+    return toks, str, lens
+
+
 def align_bpe(src_tokens: List[str], tgt_tokens: List[str],
               vocab_match: Dict[str, str]=None) -> List[int]:
     """
@@ -74,9 +98,9 @@ def align_bpe(src_tokens: List[str], tgt_tokens: List[str],
                          }
                         (Note that " ", "SOS", "EOS" and "UNK" could be hidden anywhere in the string.
                         SOS and EOS represent the start and end of a sequence, respectively.)
-    :return start_alignment: same length as tgt_tokens, each token in tgt_tokens is assigned the id of corresponding
+    :return start_alignment: `List[int]`. same length as tgt_tokens, each token in tgt_tokens is assigned the id of corresponding
                 start position in src_tokens.
-            end_alignment: same length as tgt_tokens, each token in tgt_tokens is assigned the id of corresponding
+            end_alignment: `List[int]`. same length as tgt_tokens, each token in tgt_tokens is assigned the id of corresponding
                 end position in src_tokens.
 
     For example,
@@ -99,26 +123,7 @@ def align_bpe(src_tokens: List[str], tgt_tokens: List[str],
         tgt_tokens = ["<sos>", "d", "rone is", "a", "self", "-", "<unk>", ".", "<eos>"] (len: 12)
 
     """
-    # remove all the whitespaces in src_tokens and tgt_tokens
-    def rm_white(tokens):
-        return [tok.replace(" ", "") for tok in tokens]
-
-    def replace_spe(tokens):
-        tmp_tokens = deepcopy(tokens)
-        for i, tok in enumerate(tokens):
-            if tok in vocab_match.keys():
-                tmp_tokens[i] = vocab_match[tok]
-        return tmp_tokens
-
-    def get_str(tokens):
-        toks = rm_white(tokens)
-        if vocab_match:
-            toks = replace_spe(toks)
-        str = "".join(toks)
-        lens = [len(tok) for tok in toks]
-        return toks, str, lens
-
-    _, str_src, lens_src = get_str(src_tokens)
+    _, str_src, lens_src = get_str(src_tokens, vocab_match)
     toks_tgt = rm_white(tgt_tokens)
     str_tgt = "".join(toks_tgt)
     cum_lens_src = np.cumsum(lens_src)
@@ -127,6 +132,9 @@ def align_bpe(src_tokens: List[str], tgt_tokens: List[str],
     end_alignment = []
     ptr_src, idx = 0, 0
     for i, tok_tgt in enumerate(toks_tgt):
+        if ptr_src >= len(str_src):
+            # reach the end of str_src
+            return start_alignment, end_alignment
         # perform alignment
         tmp_str = str_src[ptr_src:]
         prefix = longestCommonPrefix([tok_tgt, tmp_str])
@@ -139,6 +147,38 @@ def align_bpe(src_tokens: List[str], tgt_tokens: List[str],
         end_alignment.append(idx)
         ptr_src = next_ptr_src
     return start_alignment, end_alignment
+
+
+def find_bpe(src_tokens: List[str], tgt_tokens: List[str],
+             vocab_match: Dict[str, str]=None) -> Tuple[int, int]:
+    """
+    Find the sublist of tgt_tokens that has the same words as in src_tokens.
+    Return the (start, end) of the str_src in tgt_tokens.
+    :param src_tokens:
+    :param tgt_tokens:
+    :return: index_span: `Tuple[int, int]`. the (start, end) of the str_src in tgt_tokens.
+    Example:
+        src_tokens = ["I", "am", "happy", "."]
+        tgt_tokens = ["--", "Dear", "viewers", ", ", "...", "I", "am", "happy", ".", "..."]
+    """
+    index_span = [-1, -1]
+    str_src = "".join(rm_white(src_tokens))
+    _, str_tgt, lens_tgt = get_str(tgt_tokens, vocab_match)
+    cum_lens_tgt = np.cumsum(lens_tgt)
+    char_start = str_tgt.find(str_src)
+    char_end = char_start + len(str_src)
+    # print(str_tgt[char_start:char_end])
+    assert char_start != -1
+    i = 0
+    while cum_lens_tgt[i] <= char_start:
+        i += 1
+    index_span[0] = i  # cum_lens_tgt[i] == char_start
+    while i < len(cum_lens_tgt) and cum_lens_tgt[i] <= char_end:
+        i += 1
+    index_span[1] = i  # cum_lens_tgt[i] == char_end
+    return tuple(index_span)
+
+
 
 
 

@@ -44,35 +44,109 @@ or `pip install allennlp-models`
 ## Operationalization of Centering Theory
 The operationalization of centering theory is implemented in  `ct/centering.py`:
 
-### CenteringUtterance
-`class ConvertedSent`
+### ConvertedSent
+A class representing the annotations available for a single `CONLL` formatted sentence
+ or a sentenece with coref predictions.
+
+#### Parameters 
+- document_id: `int`.
+- line_id: `int`. The true sentence id within the document.
+- words: `List[str]`. A list of tokens corresponding to this sentence.
+            The Onotonotes tokenization, need to be mapped.
+- clusters: `Dict[int, List[Tuple[int, int]]]`.
+- pos_tags: `List[str]`. The pos annotation of each word.
+- srl_frames: `List[Tuple[str, List[str]]]`.
+        A dictionary keyed by the verb in the sentence for the given
+        Propbank frame labels, in a BIO format.
+- named_entities: `List[str]`. The BIO tags for named entities in the sentence.
+- gram_roles: `Dict[str, List[Tuple[int, int]]]`. The keys are 'subj', 'obj'.
+                The values are lists of spans.
+
+### ConvertedDoc
+A class representing the annotations for a `CONLL` formatted document.
+#### Parameters 
+- document_id: `int`.
+- sentences: `List[ConvertedSent]`.
+- entity_ids: `List[int]`. A list of entity ids that appear in this documents 
+        according to the `clusters` in all the `convertedSent`s. 
+
+
+###  CenteringUtterance
+A class representing the centering properties for `ConvertedSent`.
+
+#### Parameters
+Ontonotes Annotations:
+- document_id: `int`.
+- line_id: `int`. The true sentence id within the document.
+- words: `List[str]`. A list of tokens corresponding to this sentence.
+            The Onotonotes tokenization, need to be mapped.
+- clusters: `Dict[int, List[Tuple[int, int]]]`.
+- pos_tags: `List[str]`. The pos annotation of each word.
+- named_entities: `List[str]`. The BIO tags for named entities in the sentence.
+- gram_roles: `Dict[str, List[Tuple[int, int]]]`. The keys are 'subj', 'obj'.
+                The values are lists of spans.
+- semantic_roles:  the spans of different semantic roles in this uttererance,
+            a dict  where the keys are 'ARG0', 'ARG1'.
+            The values are lists of spans.
+
+Utterance-level properties:
+- ranking: `str`. either `grl` or `srl`.
+- CF_list: `List[int]`.
+- CF_weights: `Dict[int, float]`.
+        The keys are entity id's and the values are their corresponding weights.
+- CP: `int`. The highest ranked element in the CF_list.
+
+Discourse-level properties:
+- CB_list: `List[int]`. A list of `entity_id`s which are the CB candidates in this utterance.
+- CB_weights: `Dict[int, float]`. The keys are `entity_id`s and the values are their weights.
+- CB: `int`. The highest ranked entity in the `CB_list`.
+- first_CP: `int`. The first mentioned entity in the utterance.
+- transition: `Transition`
+- cheapness: `bool`. Cb(Un) = Cp(Un-1)
+- coherence: `bool`. Cb(Un) = Cb(Un-1)
+- salience: `bool`. Cb(Un) = Cp(Un)
+- nocb: `bool`. The `CB_list` is empty.
+
+*Note that the init function automatically setup all the utterance-level properties,
+e.g. create the `CF_list` with the correct ranking. However, the discourse-level properties need to be set manually.*
+
+
+###  CenteringDiscourse
+A class representing a discourse with centering properties.
+
+#### Parameters
+- document_id: `int`.
+- utterances: `List[CenteringUtterance]`.
+- ranking: `str`. either `grl` or `srl`.
+- first_CP: `int`. The first mentioned entity in the entire discourse.
+- len: `int`. The number of utterances in this discourse.
+- salience: the ratio of salient transitions to all transitions (`len-1`).
+- coherence: the ratio of coherent transitions to all transitions (`len-1`).
+- cheapness: the ratio of cheap transitions to all transitions (`len-1`).
+- nocb: the ratio of transitions with nocb to all transitions (`len-1`).
+
+### Usage
+#### Step 1: 
+Create a list of `convertedSent` by 
 ```python
-class ConvertedSent:
-    def __init__(self, sentence_id, document_id, words, coref_spans=None, pos_tags=None, gram_role=None, srl=None,
-                 top_spans=[], clusters=[], offset=None) -> None:
-        self.document_id = document_id
-        self.sentence_id = sentence_id
-        self.words = words
-        self.pos_tags = pos_tags
-        self.gram_role = gram_role
-        self.srl = srl
-        self.top_spans = top_spans
-        self.clusters = clusters
-        self.offset = offset
-        self.coref_spans = coref_spans
+converted_sentence = ConvertedSent(document_id=document_id,  # int
+                              line_id=line_id,  # int
+                              words=words,  # List[str]
+                              clusters=clusters,
+                              pos_tags=pos_tags,
+                              gram_roles=gram_roles)
+```
+#### Step 2: 
+Add CT properties to the `converted_document` (the list of `convertedSent`) by constructing a `CenteringDiscourse` object: 
+```python
+centeringDiscourse = CenteringDiscourse(converted_document, ranking="grl")
 ```
 
-`class CenteringUtterance`:
-```python
-CenteringUtterance(sentence: ConvertedSent, 
-                    candidate="clusters", 
-                    ranking="grl",
-                    CB=None, 
-                    transition=Transition.NA, 
-                    cheapness=None, 
-                    coherence=None, 
-                    salience=None)
-```
+#### Step 3 (optional): 
+Calculte the CT scores:
+
+
+
 
 ## Running the experiments
 ### Step 1: Train coreference models

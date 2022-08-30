@@ -1,100 +1,160 @@
 from enum import Enum
 import collections
 from typing import Dict, List, Optional, Tuple, DefaultDict
-from itertools import permutations
 import pandas as pd
 import numpy as np
-import math
-import random
+import json
 from collections import Counter
 from heapq import nlargest
-from ordered_set import OrderedSet
+from ontonotes.conll_util import string2list, string2grldict, string2clusters
+from ct.ct_util import get_perm_id_lists
+import copy
 
 TypedSpan = Tuple[int, Tuple[int, int]]
 DepSpan = Tuple[int, int, int]  # start, root, end
-
+DEFAULT_WEIGHT = 0
 
 class Transition(Enum):
     NA = 0
-    RETAIN = 1
-    CONTIUNE = 2
+    NOCB = 1
+    R_SHIFT = 2
     S_SHIFT = 3
-    R_SHIFT = 4
-    NOCB = 5
+    RETAIN = 4
+    CONTIUNE = 5
 
 
 class ConvertedSent:
-    def __init__(self, sentence_id, document_id, words, coref_spans=None, pos_tags=None, gram_role=None, srl=None,
-                 top_spans=[], clusters=[], offset=None) -> None:
+    """
+    A class representing the annotations available for a single CONLL formatted sentence
+    or a sentenece with coref predictions.
+    # Parameters：
+        - document_id: `int`.
+        - line_id: `int`. The true sentence id within the document.
+        - words: `List[str]`. A list of tokens corresponding to this sentence.
+                    The Onotonotes tokenization, need to be mapped.
+        - clusters: `Dict[int, List[Tuple[int, int]]]`.
+        - pos_tags: `List[str]`. The pos annotation of each word.
+        - named_entities: `List[str]`. The BIO tags for named entities in the sentence.
+        - gram_roles: `Dict[str, List[Tuple[int, int]]]`. The keys are 'subj', 'obj'.
+                        The values are lists of spans.
+        - semantic_roles:  the spans of different semantic roles in this uttererance,
+            a dict  where the keys are 'ARG0', 'ARG1'.
+    """
+    def __init__(self, document_id, line_id, words, clusters=None, pos_tags=None,
+                 gram_roles=None, semantic_roles=None, named_entities=None) -> None:
         self.document_id = document_id
-        self.sentence_id = sentence_id
+        self.line_id = line_id
         self.words = words
-        self.pos_tags = pos_tags
-        self.gram_role = gram_role
-        self.srl = srl
-        self.top_spans = top_spans
         self.clusters = clusters
-        self.offset = offset
-        self.coref_spans = coref_spans
+        self.pos_tags = pos_tags
+        self.gram_roles = gram_roles
+        self.semantic_roles = semantic_roles
+        self.named_entities = named_entities
+
+
+class ConvertedDoc:
+    """
+    A class representing the annotations for a `CONLL` formatted document.
+    # Parameters
+        - document_id: `int`.
+        - sentences: `List[ConvertedSent]`.
+        - entity_ids: `set[int]`. A set of entity ids that appear in this documents
+                according to the `clusters` in all the `convertedSent`s.
+    """
+    def __init__(self, document_id=None) -> None:
+        self.document_id = document_id
+        self.sentences = []
+        self.entity_ids = set()
+
+    def get_entity_ids_from_ontonotes(self):
+        for sentence in self.sentences:
+            for entity_id in sentence.clusters.keys():
+                self.entity_ids.add(entity_id)
+
+    def update_clusters(self, allennlp_clusters, map):
+        """
+        Update the clusters attribute in each ConvertedSent object from ontonotes GT annotations to
+        the predicted dicts from allennlp_csv. The entity_id's remains the same.
+        :param allennlp_clusters: `List[List[Span]]`. The token ids are document-level ids.
+                        Example: [[[42, 44], [68, 71]], ... ].
+        :param map: `Dict[int, List[Tuple[int, int, int]]`
+                    348 key-value pairs，the key is “doc_id”,
+                    and the value is a list of 3-tuples Tuple[int, int, int] of length len(allennlp_tokens),
+                    where the 3-tuple is (line_id, start, end).
+        """
+        self.entity_ids = set()
+        doc_id = str(self.document_id)
+        for line_id in range(len(self.sentences)):
+            self.sentences[line_id].clusters = collections.defaultdict(list)
+        for entity_id, cluster in enumerate(allennlp_clusters):
+            self.entity_ids.add(entity_id)
+            for span in cluster:
+                line_id = map[doc_id][span[0]][0]
+                new_span = (map[doc_id][span[0]][1], map[doc_id][span[1]][2])
+                # print(line_id, span, new_span)
+                # print(self.sentences[line_id].words[new_span[0]:new_span[1]+1])
+                self.sentences[line_id].clusters[entity_id].append(new_span)
+
 
 
 class CenteringUtterance:
     """
-    Usage:
+    # Usage:
      creating a CenteringUtterance object by:
         centeringUtterance =  CenteringUtterance(convertSent, candidate="clusters", ranking="grl")
         the init function automatically setup all the utterance-level properties,
                 e.g. create the CF_list with the correct ranking for you.
         However, the discourse-level properties need to be set manually.
+
+    # Parameters:
+    Ontonotes Annotations:
+        - document_id: `int`.
+        - line_id: `int`. The true sentence id within the document.
+        - words: `List[str]`. A list of tokens corresponding to this sentence.
+                    The Onotonotes tokenization, need to be mapped.
+        - clusters: `Dict[int, List[Tuple[int, int]]]`.
+        - pos_tags: `List[str]`. The pos annotation of each word.
+        - named_entities: `List[str]`. The BIO tags for named entities in the sentence.
+        - gram_roles: `Dict[str, List[Tuple[int, int]]]`. The keys are 'subj', 'obj'.
+                        The values are lists of spans.
+        - semantic_roles:  the spans of different semantic roles in this uttererance,
+                    a dict  where the keys are 'ARG0', 'ARG1'.
+                    The values are lists of spans.
+
     Utterance-level properties:
-        document_id: int
-        sentence_id: int
-        words: List[str]
-        gram_role:  the spans of different grammatical roles in this uttererance,
-                    a dict  where the keys are ['pro-subj', 'pro-obj', 'pro-other', 'subj', 'obj', 'others']
-                    and each value is a tuple of span and its head span
-                    Dict[str, Tuple[DepSpan, DepSpan]], where DepSpan = Tuple[int, int, int] , i.e. start, root, end
-        srl:  the spans of different semantic roles in this uttererance,
-                    a dict  where the keys are ['PRP-ARG0', 'PRP-ARG1', 'PRP-other', 'ARG0', 'ARG1', 'others']
-                    and each value is a tuple of span and its head span
-                    Dict[str, Tuple[DepSpan, DepSpan]], where DepSpan = Tuple[int, int, int] , i.e. start, root, end
-        ranking: str, either "grl or "srl"
-        candidate_mentions: OrderedSet[TypedSpan], where each typedSpan is in the format of (entity_id, (start, end)).
-        CF_list: List[TypedSpan], where each typedSpan is in the format of (entity_id, (start, end)).
+        - ranking: `str`. either `grl` or `srl`.
+        - CF_list: `List[int]`.
+        - CF_weights: `Dict[int, float]`.
+                The keys are entity id's and the values are their corresponding weights.
+        - CP: `int`. The highest ranked element in the CF_list.
+
     Discourse-level properties:
-        CB_weights: Dict[int, float], where keys are entity_ids and values are their weights
-        CB: int, entity_id. The highest ranked entity in the CB list
-        first_CP: int, entity_id. The first mentioned entity in the entire discourse
-        transition: Transition
-        cheapness: bool, Cb(Un) = Cp(Un-1)
-        coherence: bool, Cb(Un) = Cb(Un-1)
-        salience: book, Cb(Un) = Cp(Un)
+        - CB_list: `List[int]`. A list of `entity_id`s which are the CB candidates in this utterance.
+        - CB_weights: `Dict[int, float]`. The keys are `entity_id`s in `CB_list` and the values are their weights.
+        - CB: `int`. The highest ranked entity in the `CB_list`.
+        - first_CP: `int`. The first mentioned entity in the utterance.
+        - transition: `Transition`
+        - cheapness: `bool`. Cb(Un) = Cp(Un-1)
+        - coherence: `bool`. Cb(Un) = Cb(Un-1)
+        - salience: `bool`. Cb(Un) = Cp(Un)
+        - nocb: `bool`. The `CB_list` is empty.
     """
-    def __init__(self, sentence: ConvertedSent, candidate, ranking) -> None:
+    def __init__(self, sentence: ConvertedSent, ranking) -> None:
         self.document_id = sentence.document_id
-        self.sentence_id = sentence.sentence_id
+        self.line_id = sentence.line_id
         self.words = sentence.words
-        self.gram_role = sentence.gram_role
-        self.srl = sentence.srl
+        self.clusters = sentence.clusters
+        self.pos_tags = sentence.pos_tags
+        self.gram_roles = sentence.gram_roles
+        if 'subj' not in self.gram_roles.keys():
+            self.gram_roles['subj'] = []
+        if 'obj' not in self.gram_roles.keys():
+            self.gram_roles['obj'] = []
+        self.semantic_roles = None  # todo: add a semantic_roles attribute for ConvertedSent
         self.ranking = ranking
-        if candidate == "coref_spans":
-            self.candidate_mentions = self._set_candidate_mentions(sentence.coref_spans)
-        elif candidate == "top_spans":
-            self.candidate_mentions = self._set_candidate_mentions(sentence.top_spans)
-        elif candidate == "clusters":
-            self.candidate_mentions = self._set_candidate_mentions(sentence.clusters)
-        else:
-            raise AssertionError("the CT parameter `candidate` can only be "
-                                 "'coref_spans', 'top_spans' or 'clusters' ")
-        self.CF_list = []
-        if ranking == "grl":
-            self._set_CF_list(gram_role=sentence.gram_role, pos_tags=sentence.pos_tags)
-        elif ranking == "srl":
-            self._set_CF_list_by_srl(srl=sentence.srl, pos_tags=sentence.pos_tags)
-        else:
-            raise AssertionError("the CT parameter `candidate` can only be "
-                                 "'grl', 'srl' or 'recency' ")
-        self.CF_weights, self.CP = self._set_CF_weights()
+        self.CP = None
+        self.CF_weights = None
+        self.CF_list = None
         self.CB_weights = None
         self.first_CP = None
         self.CB = None
@@ -102,223 +162,53 @@ class CenteringUtterance:
         self.cheapness = None
         self.coherence = None
         self.salience = None
+        self._set_utterance_properties()
 
-    def _set_candidate_mentions(self, someTypeSpanLst): # coref_spans or clusters or top_spans
-        return OrderedSet(someTypeSpanLst)
+    @classmethod
+    def get_sorted_entity_list(self, entity_weights):
+        # sort entity_ids by entity_weights
+        entity_weights = sorted(entity_weights.items(), key=lambda item: item[1], reverse=True)
+        entity_list = []
+        for entity_id, weight in entity_weights:
+            if weight == 0:
+                break
+            entity_list.append(entity_id)
+        return entity_list
 
-    def _set_CF_list(self, gram_role, pos_tags):
-        entities: DefaultDict[str, List[TypedSpan]] = collections.defaultdict(list)
-        subj_spans = [(span_pair[0][0], span_pair[0][-1]) for span_pair in gram_role["subj"]]
-        obj_spans = [(span_pair[0][0], span_pair[0][-1]) for span_pair in gram_role["subj"]]
-        for typed_span in self.candidate_mentions:
-            entity_id, span = typed_span
-            if len(span) == 1 and ("PRP" in pos_tags[span[0]]):
-                if span in subj_spans:
-                    entities["pro-subj"].append(typed_span)
-                elif span in obj_spans:
-                    entities["pro-obj"].append(typed_span)
-                else:
-                    entities["pro-other"].append(typed_span)
-            elif span in subj_spans:
-                entities["subj"].append(typed_span)
-            elif span in obj_spans:
-                entities["obj"].append(typed_span)
-            else:
-                entities["others"].append(typed_span)
-        for key in ['pro-subj', 'pro-obj', 'pro-other', 'subj', 'obj', 'others']:
-            self.CF_list.extend(entities[key])
-
-    def _set_CF_list_by_srl(self, srl, pos_tags):
-        entities: DefaultDict[str, List[TypedSpan]] = collections.defaultdict(list)
-        for typed_span in self.candidate_mentions:
-            entity_id, span = typed_span
-            if len(span) == 1 and ("PRP" in pos_tags[span[0]]):
-                if span in srl["ARG0"]:
-                    entities["PRP-ARG0"].append(typed_span)
-                elif span in srl["ARG1"]:
-                    entities["PRP-ARG1"].append(typed_span)
-                else:
-                    entities["PRP-other"].append(typed_span)
-                continue
-            if span in srl["ARG0"]:
-                entities["ARG0"].append(typed_span)
-                continue
-            if span in srl["ARG1"]:
-                entities["ARG1"].append(typed_span)
-                continue
-            else:
-                entities["others"].append(typed_span)
-        for key in ['PRP-ARG0', 'PRP-ARG1', 'PRP-other', 'ARG0', 'ARG1', 'others']:
-            self.CF_list.extend(entities[key])
+    @classmethod
+    def _add_key_value_once(self, dict, key, value):
+        if key not in dict.keys():
+            dict[key] = value
 
     def _set_CF_weights(self):
-        CF_weights = {}
-        i = 1
-        entity_id = None
-        for typed_span in reversed(self.CF_list):
-            entity_id, span = typed_span
-            CF_weights[entity_id] = i
-            i += 1
-        CP = entity_id
-        return CF_weights, CP
-
-    def set_CB_and_cheapness_coherence(self, centering_document):
-        '''
-        Please use set_CB_weights(centering_document, gamma=0, big_gamma=0) instead
-
-        Unlike the original version of CT,
-        we decide to compare Un to the nearest previous Utterance with a non-empty Cf-list
-        :param centering_document:
-        :return:
-        '''
-        # Seeking the nearest valid sentence (we are skipping utterances with empty candidate_mentions, e.g. "Uh-huh.")
-        Uprev = None
-        for i in range(len(centering_document) - 1, -1, -1):
-            Uprev = centering_document[i]
-            if len(Uprev.CF_list):
-                break
-        # if no previous sentences are valid (candidate_mentions/CF_list is not empty),
-        # we return with CB and cheapness&coherence being None.
-        if len(self.candidate_mentions) == 0 or Uprev is None or len(Uprev.CF_list) == 0:
-            return
-        # set CB as the top ranking entity in Uprev.CF_list which exists in current candidate_mentions
-        tmp_list = [entity[0] for entity in self.CF_list]
-        if Uprev.CP in tmp_list:
-            self.cheapness = True
-        else:
-            # if CB is not equal to the top element in Uprev.CF_list (CP_{n-1})
-            self.cheapness = False
-        # continue searching other elements in Uprev.CF_list
-        for typed_span in Uprev.CF_list:
-            if typed_span[0] in tmp_list:
-                self.CB = typed_span[0]
-                if Uprev.CB is None or self.CB == Uprev.CB:
-                    self.coherence = True
-                else:
-                    self.coherence = False
-                return
-        # if candidate_mentions is not empty and Uprev.CF_list is not empty but they are disjoint, then set CB to NOCB
-        self.CB = None
-        self.coherence = False
-
-    def set_CB_and_cheapness_coherence(self, centering_document, window_size=None):
-        '''
-        Modify from set_CB_and_cheapness_coherence:
-            changed the way to choose CB
-            now it's the highest ranked entity in the previous #window_size mentions
-        CB, cheapness and coherence are also set here
-        paras: [paras, gate_escape_factor]
-              W[Cb(Un)] <- W[Cb(Uprev)] * decay_factor +
-                            gate_escape_factor * [ Cf(Uprev) - Cf(Un) ] * Uprev.CF_weights[Cf(Uprev)] +  [Cf(Un) ^ Cf(Uprev)] * Uprev.CF_weights[Cf(Uprev)]
-
-        '''
-        # Seeking the nearest valid sentence (we are skipping utterances with empty candidate_mentions, e.g. "Uh-huh.")
-        Uprev = None
-        for i in range(len(centering_document) - 1, -1, -1):
-            Uprev = centering_document[i]
-            if len(Uprev.CF_list):
-                break
-        # if no previous sentences are valid (candidate_mentions/CF_list is not empty),
-        # we return with CB and cheapness&coherence being None.
-        if len(self.candidate_mentions) == 0 or Uprev is None or len(Uprev.CF_list) == 0:
-            return
-        # set CB as the top ranking entity in Uprev.CF_list which exists in current candidate_mentions
-        tmp_list = [entity[0] for entity in self.CF_list]
-        if Uprev.CP in tmp_list:
-            self.cheapness = True
-        else:
-            # if CB is not equal to the top element in Uprev.CF_list (CP_{n-1})
-            self.cheapness = False
-        # continue searching other elements in Uprev.CF_list
-        for typed_span in Uprev.CF_list:
-            if typed_span[0] in tmp_list:
-                self.CB = typed_span[0]
-                if Uprev.CB is None or self.CB == Uprev.CB:
-                    self.coherence = True
-                else:
-                    self.coherence = False
-                return
-        # if candidate_mentions is not empty and Uprev.CF_list is not empty but they are disjoint, then set CB to NOCB
-        self.CB = None
-        self.coherence = False
-
-    def set_CB_weights(self, Uprev, paras=None):
-        '''
-        Modify from set_CB_and_cheapness_coherence:
-            changed the way to choose CB
-            now it's the highest ranked entity in CB_weights
-        CB, cheapness and coherence are also set here
-        paras: [paras, gate_escape_factor]
-              W[Cb(Un)] <- W[Cb(Uprev)] * decay_factor +
-                            gate_escape_factor * [ Cf(Uprev) - Cf(Un) ] * Uprev.CF_weights[Cf(Uprev)] +  [Cf(Un) ^ Cf(Uprev)] * Uprev.CF_weights[Cf(Uprev)]
-
-        '''
-        if paras is None:
-            gamma, big_gamma, gate_escape_factor = 0, 0, 0
-        else:
-            gamma, big_gamma, gate_escape_factor = paras
-        self.CB_weights = Uprev.CB_weights
-        # set the weight of entities in the CF_list to be the reversed ranks of them
-        # now set up self.CB_weights
-        if Uprev.CB_weights is None:
-            # Uprev is the first utterance U_0, set Cb(U_1) <- Cf(U_0)
-            self.CB_weights = Uprev.CF_weights
-            self.first_CP = Uprev.CF_list[0][0]
-        else:
-            # Cb(Un) <- Cb(Uprev) + Cf(Un)
-            # W[Cb(Un)] <- W[Cb(Uprev)] + weight[Cf(Uprev)] * gate(Cf(Un), Cf(Uprev))
-            self.CB_weights = {}
-            previous_CBs = set(Uprev.CB_weights.keys())
-            previous_CFs = set(Uprev.CF_weights.keys())
-            CBs = previous_CBs.union(previous_CFs)
-            for entity in CBs:
-                self.CB_weights[entity] = 0
-                decay_factor = gamma
-                if entity == Uprev.first_CP:
-                    decay_factor = big_gamma
-                if entity in Uprev.CB_weights.keys():
-                    # entity that in previous CB list
-                    self.CB_weights[entity] += Uprev.CB_weights[entity] * decay_factor
-                if entity in Uprev.CF_weights.keys():  # entity in self.CF_weights.keys() and
-                    # this entity is in current CF list and prvious CF list
-                    if entity in self.CF_weights.keys():
-                        self.CB_weights[entity] += Uprev.CF_weights[entity]
+        """
+        CF_weights: `Dict[int, float]`. The keys are `entity_id`s and the values are their weights.
+        TODO: add srl
+        """
+        CF_weights: Dict[int, float] = {}
+        for entity_id, spanList in self.clusters.items():
+            for span in spanList:
+                if len(span) == 1 and ("PRP" in self.pos_tags[span[0]]):
+                    if span in self.gram_roles['subj']:
+                        self._add_key_value_once(CF_weights, entity_id, 6)
+                    elif span in self.gram_roles['obj']:
+                        self._add_key_value_once(CF_weights, entity_id, 5)
                     else:
-                        self.CB_weights[entity] += Uprev.CF_weights[entity] * gate_escape_factor
-                # if gamma != 0 and self.CB_weights[entity] == 0:
-                #     print("entity: ", entity)
-                #     print("Uprev.CF_weights: ", Uprev.CF_weights)
-                #     print("Uprev.CB_weights", Uprev.CB_weights)
-                #     print("CF_weights: ", self.CF_weights)
-                #     print("CB_weights", Uprev.CB_weights)
-                #     raise AssertionError("entity must be either in prev CF or CB")
-            # print("CB_weights", self.CB_weights)
+                        self._add_key_value_once(CF_weights, entity_id, 4)
+                elif span in self.gram_roles['subj']:
+                    self._add_key_value_once(CF_weights, entity_id, 3)
+                elif span in self.gram_roles['subj']:
+                    self._add_key_value_once(CF_weights, entity_id, 2)
+                else:
+                    self._add_key_value_once(CF_weights, entity_id, 1)
+        self.CF_weights = dict(CF_weights)
 
-        self.CB = nlargest(1, self.CB_weights, key=self.CB_weights.get)[0]
-        # print(self.CB)
-        if self.CB_weights[self.CB] == 0:
-            self.CB = None
-        self.cheapness = self.set_cheapness(Uprev)
-        self.coherence = self.set_coherence(Uprev)
-
-    def set_cheapness(self, Uprev):
-        """
-        Uprev.CF_list[0][0] is the entity id of CP, the top one entity in the CF_list
-        """
-        return self.CB == Uprev.CP
-
-    def set_coherence(self, Uprev):
-        """
-        Uprev.CF_list[0][0] is the entity id of CP, the top one entity in the CF_list
-        """
-        return Uprev.CB is not None and self.CB == Uprev.CB
-
-    def set_salience(self):
-        if self.CF_list != []:
-            if not self.CB:
-                self.salience = False
-            else:
-                self.salience = (self.CB == self.CF_list[0][0])
+    def _set_utterance_properties(self):
+        if self.clusters == {}:
+            return
+        self._set_CF_weights()
+        self.CF_list = self.get_sorted_entity_list(self.CF_weights)
+        self.CP = self.CF_list[0]
 
     def set_transition(self):
         if self.coherence == True and self.salience == True:
@@ -329,169 +219,108 @@ class CenteringUtterance:
             self.transition = Transition.S_SHIFT
         elif self.coherence == False and self.salience == False:
             self.transition = Transition.R_SHIFT
-        # if self.salience is None and self.coherence is not None:
-        #      print("Error in set_transition:", self.transition, self.coherence, self.salience, self.CF_list, self.candidate_mentions)
 
 
-"""
-The following functions are for generating statistics of centering_documents, namely Table 1
-"""
-def converted_to_centering(converted_document, paras=None,
-                           candidate="cluster", ranking="grl") -> List[List[CenteringUtterance]]:
-    '''
-    Get centering_documents: Convert ConvertedSent to CenteringUtterance
-    :param converted_documents:
-    :param candidate: "top_spans" or "cluster"
-    :param ranking: "grl" or "srl"
-    :param gamma: [0,1]
-    :param big_gamma: [0,1], or None
-    :return: centering_documents: List[List[CenteringUtterance]], a list of centering_document,
-    where centering_document is a list of centering_utterance
-    '''
-    centering_document = []
-    curUtterance = None
-    for j in range(0, len(converted_document)):
-        tmpUtterance = CenteringUtterance(converted_document[j], candidate=candidate, ranking=ranking)
-        if len(tmpUtterance.CF_list) == 0:
-            continue
-        if not curUtterance:
-            curUtterance = tmpUtterance
-            continue
-        prviousUtterance = curUtterance
-        curUtterance = tmpUtterance
-        curUtterance.set_CB_and_cheapness_coherence(centering_document)
-        # curUtterance.set_CB_weights(prviousUtterance, paras=paras)
-        # print("CF_weights: ", curUtterance.CF_weights)
-        # print("CB_weights", curUtterance.CB_weights)
-        curUtterance.set_salience()
-        curUtterance.set_transition()
-        centering_document.append(curUtterance)
-    return centering_document
-
-
-def statistics(centering_document, doc_id):
+class CenteringDiscourse:
     """
-    return df: a dataframe of one row, 11 column
-                corresponds to one line in Table_1_per_document
+    A class representing a discourse with centering properties.
+    # Parameters：
+        - document_id: `int`.
+        - utterances: `List[CenteringUtterance]`.
+        - first_CP: `int`. The first mentioned entity in the entire discourse.
+        - ranking: `str`. either `grl` or `srl`.
+        - len: `int`. The number of utterances in this discourse.
+        - salience: the ratio of salient utterances to the total number of utterances.
+        - coherence: the ratio of coherent transitions to all transitions (`len-1`).
+        - cheapness: the ratio of cheap transitions to all transitions (`len-1`).
+        - nocb: the ratio of utterances with nocb to the total number of utterances.
     """
-    cnt = Counter()
-    cnt["doc_id"] = doc_id
-    cnt["num_all_u"] = len(centering_document)
-    cnt["num_valid_u"], cnt["num_nocb"], cnt["num_cheapness"], cnt["num_coherence"], cnt["num_salience"], cnt[
-        "num_continue"], cnt["num_retain"], cnt["num_s_shift"], cnt["num_r_shift"] = 0, 0, 0, 0, 0, 0, 0, 0, 0
-    for centeringUtterance in centering_document[1:]:
-        if len(centeringUtterance.candidate_mentions) == 0:
-            continue
-        # print(centeringUtterance.transition, centeringUtterance.transition is Transition.CONTIUNE)
-        cnt["num_valid_u"] += 1
-        if centeringUtterance.CB==None:
-            cnt["num_nocb"] += 1
-        if centeringUtterance.cheapness:
-            cnt["num_cheapness"] += 1
-        if centeringUtterance.coherence:
-            cnt["num_coherence"] += 1
-        if centeringUtterance.salience:
-            cnt["num_salience"] += 1
-        if centeringUtterance.transition == Transition.CONTIUNE:
-            # print("num_continue++")
-            cnt["num_continue"] += 1
-        elif centeringUtterance.transition == Transition.RETAIN:
-            cnt["num_retain"] += 1
-        elif centeringUtterance.transition == Transition.S_SHIFT:
-            cnt["num_s_shift"] += 1
-        elif centeringUtterance.transition == Transition.R_SHIFT:
-            cnt["num_r_shift"] += 1
-    df = pd.DataFrame([cnt.values()], columns=cnt.keys())
-    return df
+    def __init__(self, converted_document, ranking, recency_win=None) -> None:
+        self.document_id = converted_document.document_id
+        self.ranking = ranking
+        self.recency_win = recency_win
+        self.salience = 0
+        self.coherence = 0
+        self.cheapness = 0
+        self.nocb = 0
+        self.transition = 0
+        self.utterances = [CenteringUtterance(converted_sent, ranking) for converted_sent in converted_document.sentences]
+        self._remove_empty_utterance()
+        self.valid_len = len(self.utterances)
+        self.reset_discourse_properties()
+
+    def _remove_empty_utterance(self):
+        utterances = []
+        for utterance in self.utterances:
+            if utterance.clusters != {}:
+                utterances.append(utterance)
+        self.utterances = utterances
+
+    def _set_CB_weights(self, i):
+        """
+        Set CB_weights for self.utterances[i].
+        CB_weights: `Dict[int, float]`. The keys are `entity_id`s and the values are their weights.
+        """
+        CB_weights: Dict[int, float] = {}
+        for entity_id in self.utterances[i-1].CF_list:
+            # Same as self.utterances[i-1].CF_list, but remove those who does not appears in self.utterances[i].CF_list
+            if entity_id in self.utterances[i].CF_list:
+                CB_weights[entity_id] = self.utterances[i-1].CF_weights[entity_id]
+        return CB_weights
+
+    def reset_discourse_properties(self):
+        """
+        CB_list, CB_weights, CB, first_CP, transition, cheapness, coherence, salience, nocb
+        """
+        for i in range(1, len(self.utterances)):
+            self.utterances[i].CB_weights = self._set_CB_weights(i)
+            self.utterances[i].CB_list = CenteringUtterance.get_sorted_entity_list(self.utterances[i].CB_weights)
+            self.utterances[i].nocb = (len(self.utterances[i].CB_list) == 0)
+            if not self.utterances[i].nocb:
+                self.utterances[i].CB = self.utterances[i].CB_list[0]
+            self.utterances[i].cheapness = (self.utterances[i].CB == self.utterances[i-1].CP)
+            self.utterances[i].coherence = (self.utterances[i].CB == self.utterances[i - 1].CB)
+            self.utterances[i].salience = (self.utterances[i].CB == self.utterances[i].CP)
+            self.utterances[i].set_transition()
+
+    def comput_CT_scores(self):
+        """
+        :return: a dict of CT scores.
+        """
+        if self.valid_len > 1:
+            self.nocb = -sum([int(self.utterances[i].nocb) for i in range(1, len(self.utterances))]) / (self.valid_len -1)
+            self.salience = sum([int(self.utterances[i].salience) for i in range(1, len(self.utterances))]) / (self.valid_len -1)
+            self.coherence = sum([int(self.utterances[i].coherence) for i in range(1, len(self.utterances))]) / (self.valid_len -1)
+            self.cheapness = sum([int(self.utterances[i].cheapness) for i in range(1, len(self.utterances))]) / (self.valid_len -1)
+            self.transition = sum([int(self.utterances[i].transition.value) for i in range(1, len(self.utterances))]) / ((self.valid_len -1) * 5)
+        return {"nocb": self.nocb, "salience": self.salience,
+                "coherence": self.coherence, "cheapness": self.cheapness,
+                "transition": self.transition,
+                "kp": (self.nocb+self.salience+self.coherence)/3}
 
 
-def more_stastics(df):
-    '''
-    calculate the percentage of utterances that do not violate a certain CT constraint in the entire document.
-    for all the scores, higher == more coherent
-    '''
-    df['num_kp'] = (df['num_valid_u'] - df['num_nocb'] + df['num_cheapness'] + df['num_coherence'] + df['num_salience']) / 4
-    df['%valid_u'] = df['num_valid_u']/df['num_all_u']*100
-    df['%not_nocb'] = (1-df['num_nocb']/df['num_valid_u'])*100
-    df['%cheapness'] = df['num_cheapness']/df['num_valid_u']*100
-    df['%coherence'] = df['num_coherence']/df['num_valid_u']*100
-    df['%salience'] = df['num_salience']/df['num_valid_u']*100
-    df['%continue'] = df['num_continue']/(df['num_valid_u'])*100
-    df['%retain'] = df['num_retain']/(df['num_valid_u'])*100
-    df['%s_shift'] = df['num_s_shift']/(df['num_valid_u'])*100
-    df['%r_shift'] = df['num_r_shift']/(df['num_valid_u'])*100
-    df['%kp'] = (df['%not_nocb'] + df['%cheapness']+ df['%coherence'] + df['%salience']) /4
 
-
-"""
-The following functions are for computing centering scores, namely Table 2
-"""
-def get_perm_id_lists(num_sent, search_space_size):
+def calculate_permutation_scores(centeringDiscourse, search_space_size=100):
     """
-    :param num_sent:
-    :param search_space_size:
-    :return: a list (length of search_space_size) of id list (length of num_sent)
+    :param centeringDiscourse: the centeringDiscourse object with its utterances in the original order.
+    :param search_space_size: the size of the search space. Default: 100.
+    :return:
     """
-    # if num_sent is small, then return all permutation of [0,1,2,3,4,5]
-    if math.factorial(num_sent) <= search_space_size:
-        return list(permutations(range(num_sent)))[1:]
-    perm_id_lists = []
-    for i in range(search_space_size - 1):
-        random.seed(i)
-        perm_id_lists.append(np.random.permutation(num_sent))
-    return perm_id_lists
+    final_CT_scores = {"nocb": 0, "salience": 0, "coherence": 0, "cheapness": 0, "transition": 0, "kp": 0}
+    orginal_utterances = copy.deepcopy(centeringDiscourse.utterances)
+    unnormalized_CT_scores = centeringDiscourse.comput_CT_scores()
+    perm_id_lists = get_perm_id_lists(len(orginal_utterances), search_space_size)
+    for perm_id_list in perm_id_lists:
+        centeringDiscourse.utterances = [orginal_utterances[i] for i in perm_id_list]
+        centeringDiscourse.reset_discourse_properties()
+        cur_CT_scores = centeringDiscourse.comput_CT_scores()
+        for key in final_CT_scores.keys():
+            if unnormalized_CT_scores[key] > cur_CT_scores[key]:
+                final_CT_scores[key] += 1
+            elif unnormalized_CT_scores[key] == cur_CT_scores[key]:
+                final_CT_scores[key] += 0.5
+    # normalization
+    for key in final_CT_scores.keys():
+        final_CT_scores[key] = 100 * final_CT_scores[key] / (len(perm_id_lists) + 1)
+    return final_CT_scores, unnormalized_CT_scores
 
-
-def get_centering_search_spaces(documents, search_space_size, candidate, ranking, paras):
-    centering_search_spaces = []
-    for i, document in enumerate(documents):
-        perm_id_lists = get_perm_id_lists(len(document), search_space_size)
-        original_centerDoc = converted_to_centering(document,
-                                    paras=paras, candidate=candidate, ranking=ranking)
-        centering_search_space = [original_centerDoc]
-        # for ids in random_documents_id_list:
-        #     permutated_document = [document[i] for i in ids]
-        #     centering_search_spaces.append(doc2CenterDoc(permutated_document, candidate=candidate, ranking=ranking))
-        centering_search_space.extend(
-            [converted_to_centering([document[i] for i in ids],
-                    paras=paras, candidate=candidate, ranking=ranking) for ids in perm_id_lists]
-        )
-        # for k in range(1, search_space_size, 1):
-        #     random_document = shuffle_list(doc_search_spaces)
-        #     doc_search_spaces.append(random_document)
-        #     centering_search_space.append(doc2CenterDoc(random_document, candidate=candidate, ranking=ranking))
-        centering_search_spaces.append(centering_search_space)
-    return centering_search_spaces
-
-
-def compute_CT_score(doc_id, centering_search_space, search_space_size, M: str):
-    '''
-    :param centering_search_space:  a list of random sampled centering documents from one original document
-    :param search_space_size: len(centering_search_space)
-    :param M: string, the metric, '%not_nocb' or '%cheapness' or 'transition'
-                                  'kp'(sum up '%not_nocb'&'%cheapness'&'%coherence'&'%salience')
-    :return: float [0,1], the classification rate, the higher, the better
-    '''
-    original_doc_score = centering_search_space[0]
-    df = pd.concat([statistics(centering_document, doc_id) for centering_document in centering_search_space], ignore_index=True,
-                   sort=False)
-    more_stastics(df)
-    if M == 'transition':
-        return compute_CT_score_by_transition(df,search_space_size)
-    worse = df[df[M] < df[M].get(0)].count()[0]
-    equal = df[df[M] == df[M].get(0)].count()[0]
-    classification_rate = (worse + equal / 2) / search_space_size
-    return classification_rate
-
-
-def compute_CT_score_by_transition(df,search_space_size):
-    worse = df[(df['%continue'] < df['%continue'].get(0))
-               | ((df['%continue'] == df['%continue'].get(0)) & (df['%retain'] < df['%retain'].get(0))) |
-               ((df['%continue'] == df['%continue'].get(0)) & (df['%retain'] == df['%retain'].get(0)) & (
-                           df['%s_shift'] < df['%s_shift'].get(0)))
-               ].count()[0]
-    equal = df[((df['%continue'] == df['%continue'].get(0)) & (df['%retain'] == df['%retain'].get(0)) & (
-                df['%s_shift'] == df['%s_shift'].get(0)))
-    ].count()[0]
-    classification_rate = (worse + equal / 2) / search_space_size
-    return classification_rate

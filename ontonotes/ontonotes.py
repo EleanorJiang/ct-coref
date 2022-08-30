@@ -52,7 +52,7 @@ class OntonotesSentence:
         The spans for entity mentions involved in coreference resolution within the sentence.
         Each element is a tuple composed of (cluster_id, (start_index, end_index)). Indices
         are `inclusive`.
-    cluster: `Dict[int, List[Tuple[int, int]]]`. cluster_id -> list of (start_index, end_index).
+    clusters: `Dict[int, List[Tuple[int, int]]]`. cluster_id -> list of (start_index, end_index).
     """
 
     def __init__(
@@ -69,7 +69,7 @@ class OntonotesSentence:
         named_entities: List[str],
         srl_frames: List[Tuple[str, List[str]]],
         coref_spans: Set[TypedSpan],
-        cluster: Dict[int, List[Tuple[int, int]]]
+        clusters: Dict[int, List[Tuple[int, int]]]
     ) -> None:
 
         self.document_id = document_id
@@ -84,7 +84,7 @@ class OntonotesSentence:
         self.named_entities = named_entities
         self.srl_frames = srl_frames
         self.coref_spans = coref_spans
-        self.cluster = cluster
+        self.clusters = clusters
 
 
 class Ontonotes:
@@ -353,7 +353,7 @@ class Ontonotes:
         return OntonotesSentence(
             document_id=document_id,
             sentence_id=sentence_id,
-            sentence=sentence,
+            words=sentence,
             pos_tags=pos_tags,
             parse_tree=parse_tree,
             predicate_lemmas=predicate_lemmas,
@@ -362,7 +362,7 @@ class Ontonotes:
             speakers=speakers,
             named_entities=named_entities,
             srl_frames=srl_frames,
-            coref_span_tuples=coref_span_tuples,
+            coref_spans=coref_span_tuples,
             clusters=dict(clusters)  # NEW: to match the predicted_dict
         )
 

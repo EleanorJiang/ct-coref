@@ -1,4 +1,4 @@
-import spacy, os, pickle, json
+import spacy, os, pickle, json, math
 from .ontonotes import Ontonotes, OntonotesSentence, TypedSpan
 import collections
 from typing import Dict, List, Optional, Tuple, DefaultDict, NamedTuple, Union, Dict, Any, Optional
@@ -21,6 +21,77 @@ def find_span(head):
     start, end = head.i, head.i
     dfs(head)
     return start, end
+
+
+def string2list(string):
+    """
+    convert a printed list (str) to a List of token
+    :param string: '[\'--\', \'basically\', \',\', \'it\', \'was\', \'unanimously\', \'agreed\', \'upon\', \'by\', \'the\', \'various\', \'relevant\', \'parties\', \'.\']'
+    :return: tokens: `List[str]`.
+    """
+    org_string = string
+    string = string.replace("', '", "[SEP]").replace('\", \"', "[SEP]")
+    string = string.replace('\", \'', "[SEP]").replace('\', \"', "[SEP]")
+    string = string.replace(" ", "").replace("\\", "").replace("/", "")
+    string = string.replace(',', "[COMMA]")
+    string = string[2:-2].replace("'", "[PRIME]")
+    tokens = string.split('[SEP]')
+    tokens = [token.replace("[PRIME]", "'") for token in tokens]
+    tokens = [token.replace("[COMMA]", ",") for token in tokens]
+    return tokens
+
+
+def string2grldict(string):
+    if type(string) != str:
+        return {}
+    gram_roles = {}
+    if string.find('obj') > string.find('subj'):
+        string = string.replace(", 'obj': ", "<SEP>obj:")
+    else:
+        string = string.replace(", 'subj': ", "<SEP>subj:")
+    string = string.replace("'", "").replace(" ", "")
+    lists = string[1:-1].split('<SEP>')
+    for list in lists:
+        kv = list.split(':')
+        (key, value) = kv
+        value_list = value[2:-2].split("),(")
+        span_list = [(int(value.split(",")[0]), int(value.split(",")[1])) for value in value_list]
+        gram_roles[key] = span_list
+    return gram_roles
+
+
+def string2clusters(string):
+    """
+    :param string: "[[[3, 3], [16, 16], [19, 23]], [[25, 27], [42, 44], [57, 59]], [[65, 66], [82, 82]]]"
+    :return: cluster: `List[List[Span]]`.
+            e.g.  [[(3, 3), (16, 16), (19, 23)], ... ]
+    """
+    if string == "[]":
+        return []
+    clusters = []
+    list_strings = string.replace(" ", "")[3:-3].split("]],[[")
+    for list_str in list_strings:  # list_str = '27,27],[59,60],[72,73'
+        lst = list_str.split("],[")  # lst = ['27,27','59,60','72,73']
+        cluster = [(int(pair.split(",")[0]), int(pair.split(",")[1])) for pair in lst]
+        clusters.append(cluster)
+    return clusters
+
+def string2ontonotesClusters(string):
+    """
+    :param string: "{42: [(2, 2), (5, 9)], 32: [(11, 13)]}"
+    :return: cluster: `Dict[int, List[Tuple[int, int]]]`.  {42: [(2, 2), (5, 9)], 32: [(11, 13)]}
+    """
+    if string == "{}":
+        return {}
+    clusters: Dict[int, List[Tuple[int, int]]] = {}
+    kv_strings = string[1:-3].split(")], ")
+    for kv_string in kv_strings:
+        kv = kv_string.split(": [(")
+        entity_id = int(kv[0])
+        span_strings = kv[1].split("), (")   # ["2, 2", "5, 9"]
+        span_List = [(int(span_str.split(", ")[0]), int(span_str.split(", ")[1])) for span_str in span_strings]
+        clusters[entity_id] = span_List
+    return clusters
 
 
 def ontoNotes2spacy(ontonotes_file, nlp, save_path) -> List[Dict[str, List[List[Any]]]]:

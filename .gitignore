@@ -5,3 +5,5 @@
 /scripts/
 /old/
 /mis/
+/ct/__pycache__/
+/ontonotes/__pycache__/

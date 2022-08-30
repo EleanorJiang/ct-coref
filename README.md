@@ -155,12 +155,10 @@ python get_coref_F1.py
 ```
 ### Step 2: Get CT scores
 ```ON
-python c2f_analysis.py  \
---data_dir path/to/coreference/models
--e coref-spanbert-base-2021.1.5 \
--dp 100 \
+ python -m ct.ct_ontonotes \
+--experiment-ids gold, coref-spanbert-base-2021.1.5 \
 --epoch best \
--r path/to/save/results
+--save-path path/to/coreference/models
 ```
 
 ## Contact
